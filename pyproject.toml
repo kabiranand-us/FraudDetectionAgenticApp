@@ -1,0 +1,39 @@
+[project]
+name = "fraud-agent"
+version = "0.1.0"
+description = "Insurance fraud detection: rules + ML + Google ADK investigation agents on BigQuery"
+requires-python = ">=3.11,<3.14"
+dependencies = [
+    "db-dtypes>=1.7.1",
+    "fastapi>=0.115",
+    "google-adk>=2.9.2",
+    "google-cloud-bigquery>=3.25",
+    "joblib>=1.6.0",
+    "pandas>=3.0.6",
+    "pyarrow>=25.0.1",
+    "python-dotenv>=1.0",
+    "pyyaml>=6.0.3",
+    "scikit-learn>=1.9.1",
+    "uvicorn[standard]>=0.30",
+]
+
+[project.scripts]
+fraud-load = "fraud_agent.ingest.load_bigquery:main"
+fraud-rules = "fraud_agent.rules.engine:main"
+fraud-train-claims = "fraud_agent.models.claims_model:main"
+fraud-investigate = "fraud_agent.agents.run_claims:main"
+fraud-alerts = "fraud_agent.alerts:main"
+fraud-graph = "fraud_agent.graph.build:main"
+fraud-network = "fraud_agent.agents.run_network:main"
+fraud-api = "fraud_agent.api.main:main"
+fraud-case = "fraud_agent.agents.run_cases:main"
+
+[dependency-groups]
+dev = ["pytest>=8"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["fraud_agent"]

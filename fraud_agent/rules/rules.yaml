@@ -1,0 +1,161 @@
+# Fraud red-flag rules, evaluated in BigQuery against fraud_clean.<table>.
+#
+# condition: a BigQuery boolean expression over the record, aliased `r`.
+#            It may use subqueries on other fraud_clean tables.
+#            Never reference fraud_flag, fraud_type, claim_status or
+#            approved_amount - those are labels / investigation outcomes.
+# severity:  set from measured precision on the labelled data
+#            (critical >= 95%, high >= 60%, medium >= 25%).
+#            Run `uv run fraud-rules` to see current precision per rule.
+# targets:   the fraud types the rule is meant to catch (documentation).
+
+severity_weights:
+  critical: 1.0
+  high: 0.7
+  medium: 0.4
+
+rules:
+  # ---------- policies: free insurance ----------
+  - id: POL_PREMIUM_NOT_COLLECTED
+    table: policies
+    severity: critical
+    description: Policy issued but premium was never collected.
+    targets: [Fake Policy - No Premium Collected]
+    condition: NOT r.premium_actually_collected
+
+  - id: POL_BACKDATED
+    table: policies
+    severity: critical
+    description: Policy issue date was backdated.
+    targets: [Backdated Policy Issuance]
+    condition: r.backdated_flag
+
+  - id: POL_FREE_LOOK_CANCELLED
+    table: policies
+    severity: high
+    description: Policy cancelled within the free-look period.
+    targets: [Free-Look Period Abuse]
+    condition: r.free_look_cancelled
+
+  - id: POL_CANCELLED
+    table: policies
+    severity: medium
+    description: Policy is cancelled.
+    targets: [Free-Look Period Abuse]
+    condition: r.policy_status = 'Cancelled'
+
+  - id: POL_AGENT_LICENSE_ISSUE
+    table: policies
+    severity: medium
+    description: Sold by an agent with a non-valid license in ghost-broking records.
+    targets: [Fronting / Straw Policyholder, Fake Policy - No Premium Collected]
+    condition: >-
+      r.agent_id IN (SELECT agent_id FROM fraud_clean.ghost_broking
+                     WHERE license_status != 'Valid')
+
+  # ---------- claims ----------
+  - id: CLM_DOCUMENTS_ALTERED
+    table: claims
+    severity: critical
+    description: Supporting documents show signs of alteration.
+    targets: [Fake Supporting Documents]
+    condition: r.documents_altered_flag
+
+  - id: CLM_EXCEEDS_SUM_INSURED
+    table: claims
+    severity: critical
+    description: Claim amount exceeds the policy's sum insured.
+    targets: [Exaggerated Claim Amount]
+    condition: >-
+      r.claim_amount > (SELECT p.sum_insured FROM fraud_clean.policies p
+                        WHERE p.policy_id = r.policy_id)
+
+  - id: CLM_EARLY_CLAIM
+    table: claims
+    severity: medium
+    description: Incident within 30 days of policy issue.
+    targets: [Early Claim Fraud]
+    condition: r.days_policy_to_incident < 30
+
+  - id: CLM_AGENT_LICENSE_ISSUE
+    table: claims
+    severity: medium
+    description: Claim handled by an agent with a non-valid license in ghost-broking records.
+    targets: [Staged Accident, Multiple/Duplicate Claims]
+    condition: >-
+      r.agent_id IN (SELECT agent_id FROM fraud_clean.ghost_broking
+                     WHERE license_status != 'Valid')
+
+  # ---------- payments ----------
+  - id: PAY_DUPLICATE_RECEIPT
+    table: payments
+    severity: critical
+    description: Receipt number already used on another payment.
+    targets: [Fake Payment Receipt Submitted]
+    condition: r.is_duplicate_receipt
+
+  - id: PAY_NOT_REMITTED
+    table: payments
+    severity: critical
+    description: Premium collected but not remitted to the insurer.
+    targets: [Premium Diversion by Agent]
+    condition: NOT r.premium_remitted_to_insurer
+
+  - id: PAY_REMITTANCE_DELAY
+    table: payments
+    severity: critical
+    description: Premium remitted more than 7 days after collection.
+    targets: [Premium Diversion by Agent]
+    condition: r.remittance_delay_days > 7
+
+  - id: PAY_BOUNCED
+    table: payments
+    severity: critical
+    description: Payment bounced but coverage was issued.
+    targets: [Bounced Cheque Used for Coverage]
+    condition: r.payment_status = 'Bounced'
+
+  - id: PAY_REVERSED
+    table: payments
+    severity: critical
+    description: Payment reversed (refund claimed).
+    targets: [Duplicate/Unauthorized Refund Claimed]
+    condition: r.payment_status = 'Reversed'
+
+  - id: PAY_AGENT_LICENSE_ISSUE
+    table: payments
+    severity: medium
+    description: Collected by an agent with a non-valid license in ghost-broking records.
+    targets: [Premium Diversion by Agent]
+    condition: >-
+      r.agent_id IN (SELECT agent_id FROM fraud_clean.ghost_broking
+                     WHERE license_status != 'Valid')
+
+  # ---------- ghost broking ----------
+  - id: GB_PREMIUM_NOT_DEPOSITED
+    table: ghost_broking
+    severity: critical
+    description: Agent collected premium but did not deposit it with the insurer.
+    targets: [Premium Pocketing - No Remittance]
+    condition: NOT r.premium_deposited_with_insurer
+
+  - id: GB_LICENSE_NOT_VALID
+    table: ghost_broking
+    severity: high
+    description: Agent license is expired, suspended, fake/cloned or never issued.
+    targets: [Fake/Cloned Agent Identity, Expired License Sales, Unlicensed Selling]
+    condition: r.license_status != 'Valid'
+
+  - id: GB_CUSTOMER_UNAWARE
+    table: ghost_broking
+    severity: high
+    description: Customer was unaware of the agent's real status.
+    targets: [Fake/Cloned Agent Identity, Unlicensed Selling]
+    condition: NOT r.customer_aware_of_agent_status
+
+  - id: GB_REPEAT_COMPLAINTS
+    table: ghost_broking
+    severity: high
+    description: Two or more complaints against the agent on this record.
+    targets: [Fake/Cloned Agent Identity, Premium Pocketing - No Remittance]
+    condition: r.complaint_count >= 2
